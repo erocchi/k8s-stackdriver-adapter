@@ -1,12 +1,9 @@
 /*
 Copyright 2017 The Kubernetes Authors.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
     http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -127,10 +124,10 @@ func (p *incrementalTestingProvider) GetRootScopedMetricBySelector(groupResource
 
 	// TODO: work for objects not in core v1
 	matchingObjectsRaw, err := p.client.RESTClient().Get().
-		Resource(groupResource.Resource).
-		VersionedParams(&metav1.ListOptions{LabelSelector: selector.String()}, scheme.ParameterCodec).
-		Do().
-		Get()
+			Resource(groupResource.Resource).
+			VersionedParams(&metav1.ListOptions{LabelSelector: selector.String()}, scheme.ParameterCodec).
+			Do().
+			Get()
 	if err != nil {
 		return nil, err
 	}
@@ -147,11 +144,11 @@ func (p *incrementalTestingProvider) GetNamespacedMetricBySelector(groupResource
 
 	// TODO: work for objects not in core v1
 	matchingObjectsRaw, err := p.client.RESTClient().Get().
-		Namespace(namespace).
-		Resource(groupResource.Resource).
-		VersionedParams(&metav1.ListOptions{LabelSelector: selector.String()}, scheme.ParameterCodec).
-		Do().
-		Get()
+			Namespace(namespace).
+			Resource(groupResource.Resource).
+			VersionedParams(&metav1.ListOptions{LabelSelector: selector.String()}, scheme.ParameterCodec).
+			Do().
+			Get()
 	if err != nil {
 		return nil, err
 	}
