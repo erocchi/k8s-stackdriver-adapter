@@ -207,7 +207,7 @@ func (a *MetricsAPIInstaller) registerResourceHandlers(storage rest.Storage, ws 
 		nameParam,
 		subresourceParam,
 	}
-	rootScopedPath := "{resource}/{name}/{subresource}"
+	rootScopedPath := "{resource}/{name}/{subresource:*}"
 
 	// metrics describing namespaced objects (e.g. pods)
 	namespaceParam := ws.PathParameter(scope.ArgumentName(), scope.ParamDescription()).DataType("string")
@@ -217,7 +217,7 @@ func (a *MetricsAPIInstaller) registerResourceHandlers(storage rest.Storage, ws 
 		nameParam,
 		subresourceParam,
 	}
-	namespacedPath := scope.ParamName() + "/{" + scope.ArgumentName() + "}/{resource}/{name}/{subresource}"
+	namespacedPath := scope.ParamName() + "/{" + scope.ArgumentName() + "}/{resource}/{name}/{subresource:*}"
 	namespacedPathPrefix := gpath.Join(a.prefix, scope.ParamName()) + "/"
 	itemPathFn := func(name, namespace, resource, subresource string) bytes.Buffer {
 		var buf bytes.Buffer
@@ -232,7 +232,7 @@ func (a *MetricsAPIInstaller) registerResourceHandlers(storage rest.Storage, ws 
 		return buf
 	}
 
-	namespaceSpecificPath := scope.ParamName() + "/{" + scope.ArgumentName() + "}/metrics/{name}"
+	namespaceSpecificPath := scope.ParamName() + "/{" + scope.ArgumentName() + "}/metrics/{name:*}"
 	namespaceSpecificParams := []*restful.Parameter{
 		namespaceParam,
 		nameParam,

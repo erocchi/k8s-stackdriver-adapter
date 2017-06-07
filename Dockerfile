@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM debian
+#FROM debian
+FROM gcr.io/google-containers/debian-base-amd64:0.1
 
 MAINTAINER Karol Wychowaniec "kawych@google.com"
 
 ADD build/sample sample
+
+RUN clean-install ca-certificates
 
 RUN chmod +x sample

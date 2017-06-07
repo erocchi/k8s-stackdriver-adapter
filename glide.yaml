@@ -2,6 +2,10 @@ package: k8s.io/custom-metrics-boilerplate
 import:
 - package: github.com/emicklei/go-restful
 - package: github.com/spf13/cobra
+- package: google.golang.org/api/monitoring/v3
+- package: golang.org/x/oauth2
+- package: golang.org/x/oauth2/google
+- package: cloud.google.com/go/compute/metadata
 - package: k8s.io/apimachinery
   subpackages:
   - pkg/api/errors

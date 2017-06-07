@@ -102,3 +102,31 @@ spec:
     name: uber-adapter
     namespace: default
   version: v1alpha1
+---
+apiVersion: rbac.authorization.k8s.io/v1alpha1
+kind: ClusterRole
+metadata:
+  name: metrics-reader
+rules:
+- apiGroups:
+  - "custom-metrics.metrics.k8s.io"
+  resources:
+  - "*"
+  verbs: ["list", "get", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1alpha1
+kind: ClusterRoleBinding
+metadata:
+  creationTimestamp: null
+  name: all-metrics-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: metrics-reader
+subjects:
+- apiVersion: rbac.authorization.k8s.io/v1alpha1
+  kind: Group
+  name: system:anonymous
+- apiVersion: rbac.authorization.k8s.io/v1alpha1
+  kind: Group
+  name: system:unauthenticated
