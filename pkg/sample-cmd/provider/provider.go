@@ -17,6 +17,7 @@ import (
 	"time"
 	"fmt"
 
+	"github.com/golang/glog"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -28,35 +29,87 @@ import (
 	_ "k8s.io/client-go/pkg/api/install"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/client-go/kubernetes/scheme"
+	stackdriver "google.golang.org/api/monitoring/v3"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 
 	"k8s.io/custom-metrics-boilerplate/pkg/provider"
+	"k8s.io/custom-metrics-boilerplate/config"
 )
 
 type incrementalTestingProvider struct {
 	client coreclient.CoreV1Interface
 
 	values map[provider.MetricInfo]int64
+
+	service *stackdriver.Service
+
+	config *config.GceConfig
 }
 
 func NewFakeProvider(client coreclient.CoreV1Interface) provider.CustomMetricsProvider {
+	// TODO(kawych): move this part to some sensible place
+	oauthClient := oauth2.NewClient(oauth2.NoContext, google.ComputeTokenSource(""))
+	stackdriverService, err := stackdriver.New(oauthClient)
+	if err != nil {
+		glog.Fatalf("Failed to create Stackdriver client: %v", err)
+	}
+	gceConf, err := config.GetGceConfig("custom.googleapis.com")
+	if err != nil {
+		glog.Fatalf("Failed to get GCE config: %v", err)
+	}
 	return &incrementalTestingProvider{
 		client: client,
 		values: make(map[provider.MetricInfo]int64),
+		service: stackdriverService,
+		config: gceConf,
 	}
 }
 
-func (p *incrementalTestingProvider) valueFor(groupResource schema.GroupResource, metricName string, namespaced bool) int64 {
+func (p *incrementalTestingProvider) valueFor(groupResource schema.GroupResource, metricName string, namespaced bool, namespace string, name string) (int64, error) {
+	// TODO(kawych) extract this and do it in one place only! START
+	group, err := api.Registry.Group(groupResource.Group)
+	if err != nil {
+		glog.Infof("valueFor failed with: %s", err)
+		return 0, err
+	}
+	kind, err := api.Registry.RESTMapper().KindFor(groupResource.WithVersion(group.GroupVersion.Version))
+	if err != nil {
+		glog.Infof("valueFor failed secondly with: %s", err)
+		return 0, err
+	}
+	// ******** END ********
+	project := fmt.Sprintf("projects/%s", p.config.Project)
+	fullMetricName := fmt.Sprintf("%s/%s", p.config.MetricsPrefix, metricName)
+	metricFilter := fmt.Sprintf("metric.type = \"%s\"", fullMetricName)
+	namespaceFilter := fmt.Sprintf("metric.label.namespace_name = \"%s\"", namespace)
+	resourceTypeFilter := fmt.Sprintf("metric.label.type = \"%s\"", kind.Kind)
+	// TODO(kawych) namespace, metric.lable.type may be "ns"...
+	resourceNameFilter := fmt.Sprintf("metric.label.pod_name = \"%s\"", name)
+	// TODO(kawych) may be as well namespace_name/service_name/deployment_name/etc...
+	mergedFilters := fmt.Sprintf("(%s) AND (%s) AND (%s) AND (%s)", metricFilter, namespaceFilter, resourceTypeFilter, resourceNameFilter)
+	//rable := [4]string{metricFilter, namespaceFilter, resourceTypeFilter, resourceNameFilter}
+	//mergedFilters := strings.Join(rable, " AND ")
+	foo, err :=
+		// TODO(kawych): normal timestamps, normal alignment period...
+		p.service.Projects.TimeSeries.List(project).Filter(mergedFilters).IntervalStartTime("2017-06-01T15:00:00Z").IntervalEndTime("2017-06-01T14:00:00Z").AggregationPerSeriesAligner("ALIGN_MEAN").AggregationAlignmentPeriod("3600s").Do()
+	if err != nil {
+		glog.Fatalf("Failed request to stackdriver api: %s", err)
+	}
+
+	value := int64(*foo.TimeSeries[0].Points[0].Value.DoubleValue) // TODO(kawych) make sure that this value is correct
+
+	//metrics := make([]provider.MetricInfo, len(foo.MetricDescriptors))
+	glog.Infof("value for metric, groupResource: %s, metricName: %s, namespaced: %v", groupResource, metricName, namespaced)
 	info := provider.MetricInfo{
 		GroupResource: groupResource,
 		Metric: metricName,
 		Namespaced: namespaced,
 	}
 
-	value := p.values[info]
-	value += 1
 	p.values[info] = value
 
-	return value
+	return value, nil
 }
 
 func (p *incrementalTestingProvider) metricFor(value int64, groupResource schema.GroupResource, namespace string, name string, metricName string) (*custom_metrics.MetricValue, error) {
@@ -114,13 +167,21 @@ func (p *incrementalTestingProvider) metricsFor(totalValue int64, groupResource 
 }
 
 func (p *incrementalTestingProvider) GetRootScopedMetricByName(groupResource schema.GroupResource, name string, metricName string) (*custom_metrics.MetricValue, error) {
-	value := p.valueFor(groupResource, metricName, false)
+	glog.Infof("getrootscopedmetricbyname, groupResource: %s, metricName: %s, name: %s", groupResource, metricName, name)
+	value, err := p.valueFor(groupResource, metricName, false, "", name)
+	if err != nil {
+		return nil, err
+	}
 	return p.metricFor(value, groupResource, "", name, metricName)
 }
 
 
 func (p *incrementalTestingProvider) GetRootScopedMetricBySelector(groupResource schema.GroupResource, selector labels.Selector, metricName string) (*custom_metrics.MetricValueList, error) {
-	totalValue := p.valueFor(groupResource, metricName, false)
+	glog.Infof("getrootscopedmetricbyselector, groupResource: %s, metricName: %s", groupResource, metricName)
+	totalValue, err := p.valueFor(groupResource, metricName, false, "", "tratatata") // TODO(kawych) retrieve the actual name
+	if err != nil {
+		return nil, err
+	}
 
 	// TODO: work for objects not in core v1
 	matchingObjectsRaw, err := p.client.RESTClient().Get().
@@ -135,12 +196,20 @@ func (p *incrementalTestingProvider) GetRootScopedMetricBySelector(groupResource
 }
 
 func (p *incrementalTestingProvider) GetNamespacedMetricByName(groupResource schema.GroupResource, namespace string, name string, metricName string) (*custom_metrics.MetricValue, error) {
-	value := p.valueFor(groupResource, metricName, true)
+	glog.Infof("getnamespacedmetricbyname, groupResource: %s, namespace: %s, metricName: %s, name: %s", groupResource, namespace, metricName, name)
+	value, err := p.valueFor(groupResource, metricName, true, namespace, name)
+	if err != nil {
+		return nil, err
+	}
 	return p.metricFor(value, groupResource, namespace, name, metricName)
 }
 
 func (p *incrementalTestingProvider) GetNamespacedMetricBySelector(groupResource schema.GroupResource, namespace string, selector labels.Selector, metricName string) (*custom_metrics.MetricValueList, error) {
-	totalValue := p.valueFor(groupResource, metricName, true)
+	glog.Infof("getnamespacedmetricbyselector, groupResource: %s, namespace: %s, metricName: %s", groupResource, namespace, metricName)
+	totalValue, err := p.valueFor(groupResource, metricName, true, namespace, "tratatata") // TODO(kawych) retrieve the actual name
+	if err != nil {
+		return nil, err
+	}
 
 	// TODO: work for objects not in core v1
 	matchingObjectsRaw, err := p.client.RESTClient().Get().
@@ -156,22 +225,32 @@ func (p *incrementalTestingProvider) GetNamespacedMetricBySelector(groupResource
 }
 
 func (p *incrementalTestingProvider) ListAllMetrics() []provider.MetricInfo {
-	// TODO: maybe dynamically generate this?
-	return []provider.MetricInfo{
-		{
-			GroupResource: schema.GroupResource{Group: "", Resource: "pods"},
-			Metric: "packets-per-second",
-			Namespaced: true,
-		},
-		{
-			GroupResource: schema.GroupResource{Group: "", Resource: "services"},
-			Metric: "connections-per-second",
-			Namespaced: true,
-		},
-		{
-			GroupResource: schema.GroupResource{Group: "", Resource: "namespaces"},
-			Metric: "queue-length",
-			Namespaced: false,
-		},
+	// TODO(kawych)
+	// - filter only type GAUGE (so that we can aggregate)
+	// - assign to relevant resource types
+	// - ...
+	glog.Infof("listing all metrics, project: %s, cluster: %s, metric prefix: %s", p.config.Project, p.config.Cluster, p.config.MetricsPrefix)
+	project := fmt.Sprintf("projects/%s", p.config.Project)
+	onlyCustom := fmt.Sprintf("metric.type = starts_with(\"%s/\")", p.config.MetricsPrefix)
+	foo, err := p.service.Projects.MetricDescriptors.List(project).Filter(onlyCustom).Do() //TODO(kawych) support errors
+	if err != nil {
+		glog.Fatalf("Failed request to stackdriver api: %s", err)
 	}
+	metrics := make([]provider.MetricInfo, len(foo.MetricDescriptors))
+
+	for i := 0; i < len(foo.MetricDescriptors); i++ {
+		namespaced := false
+		for j := 0; j < len(foo.MetricDescriptors[i].Labels); j++ {
+			if foo.MetricDescriptors[i].Labels[j].Key == "namespace_name" {
+				namespaced = true
+			}
+		}
+		metrics[i] = provider.MetricInfo{
+			// Resource: pods/services/namespaces/deployments/...
+			GroupResource: schema.GroupResource{Group: "", Resource: "pods"},
+			Metric: foo.MetricDescriptors[i].Type,
+			Namespaced: namespaced,
+		}
+	}
+	return metrics
 }
