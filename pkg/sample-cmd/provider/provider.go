@@ -13,9 +13,17 @@ limitations under the License.
 
 package provider
 
+/*
+ * TODO(kawych):
+ * - Return one item per resource. Currently one item per resource is returned, but the metric
+ *   value is equal to aggregated metric values from multiple time series.
+ * - Don't hardcode resource type names.
+ */
+
 import (
 	"time"
 	"fmt"
+	"strings"
 
 	"github.com/golang/glog"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,9 +53,26 @@ type incrementalTestingProvider struct {
 	service *stackdriver.Service
 
 	config *config.GceConfig
+
+	rateInterval time.Duration
 }
 
-func NewFakeProvider(client coreclient.CoreV1Interface) provider.CustomMetricsProvider {
+// TODO(kawych) think of something better than hardcoding
+var objectKinds map[string]string = map[string]string{
+	"Pod": "pod",
+	"Service": "service",
+	"Namespace": "ns",
+	"Deployment": "deployment",
+}
+
+var objectKinds_v2 map[string]string = map[string]string{
+	"Pod": "pod",
+	"Service": "service",
+	"Namespace": "namespace",
+	"Deployment": "deployment",
+}
+
+func NewFakeProvider(client coreclient.CoreV1Interface, rateInterval time.Duration) provider.CustomMetricsProvider {
 	// TODO(kawych): move this part to some sensible place
 	oauthClient := oauth2.NewClient(oauth2.NoContext, google.ComputeTokenSource(""))
 	stackdriverService, err := stackdriver.New(oauthClient)
@@ -63,44 +88,109 @@ func NewFakeProvider(client coreclient.CoreV1Interface) provider.CustomMetricsPr
 		values: make(map[provider.MetricInfo]int64),
 		service: stackdriverService,
 		config: gceConf,
+		rateInterval: rateInterval,
 	}
 }
 
-func (p *incrementalTestingProvider) valueFor(groupResource schema.GroupResource, metricName string, namespaced bool, namespace string, name string) (int64, error) {
-	// TODO(kawych) extract this and do it in one place only! START
+func matchesFilter(timeSeries *stackdriver.TimeSeries, filter map[string]string) bool {
+	for k, v := range filter {
+		if timeSeries.Metric.Labels[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func getMetricValueFromResponse(response stackdriver.ListTimeSeriesResponse, filter map[string]string) (int64, error) {
+	if len(response.TimeSeries) < 1 {
+		return 0, fmt.Errorf("Expected at least one time series from Stackdriver, but received %v", len(response.TimeSeries))
+	}
+	// Find time series with specified labels matching
+	// Stackdriver API doesn't allow complex label filtering (i.e. "label1 = x AND (label2 = y OR label2 = z)"),
+	// therefore only part of the filters is passed and remaining filtering is done here.
+	for _, series := range response.TimeSeries {
+		if matchesFilter(series, filter) {
+			if len(series.Points) != 1 {
+				return 0, fmt.Errorf("Expected exactly one Point in TimeSeries from Stackdriver, but received %v", len(series.Points))
+			}
+			value := *series.Points[0].Value
+			switch {
+			case value.Int64Value != nil:
+				return *value.Int64Value, nil
+			case value.DoubleValue != nil:
+				return int64(*value.DoubleValue), nil
+			default:
+				return 0, fmt.Errorf("Expected metric of type DoubleValue or Int64Value, but received TypedValue: %v", value)
+			}
+		}
+	}
+	return 0, fmt.Errorf("Received %v time series from Stackdriver, but non of them matches filters. Series here: %s, filters here: %s", len(response.TimeSeries), response.TimeSeries, filter)
+}
+
+func (p* incrementalTestingProvider) groupByFieldsForResource(namespace string) []string {
+	if namespace == "" {
+		return []string{"metric.label.type"}
+	}
+		return []string{"metric.label.type", "metric.label.namespace_name"}
+}
+
+func (p* incrementalTestingProvider) metricFilterForResource(groupResource schema.GroupResource, name []string, metricName string) (string, error) {
 	group, err := api.Registry.Group(groupResource.Group)
 	if err != nil {
-		glog.Infof("valueFor failed with: %s", err)
-		return 0, err
+		return "", err
 	}
 	kind, err := api.Registry.RESTMapper().KindFor(groupResource.WithVersion(group.GroupVersion.Version))
 	if err != nil {
-		glog.Infof("valueFor failed secondly with: %s", err)
-		return 0, err
+		glog.Errorf("valueFor failed secondly with: %s", err)
+		return "", err
 	}
-	// ******** END ********
-	project := fmt.Sprintf("projects/%s", p.config.Project)
 	fullMetricName := fmt.Sprintf("%s/%s", p.config.MetricsPrefix, metricName)
 	metricFilter := fmt.Sprintf("metric.type = \"%s\"", fullMetricName)
-	namespaceFilter := fmt.Sprintf("metric.label.namespace_name = \"%s\"", namespace)
-	resourceTypeFilter := fmt.Sprintf("metric.label.type = \"%s\"", kind.Kind)
-	// TODO(kawych) namespace, metric.lable.type may be "ns"...
-	resourceNameFilter := fmt.Sprintf("metric.label.pod_name = \"%s\"", name)
-	// TODO(kawych) may be as well namespace_name/service_name/deployment_name/etc...
-	mergedFilters := fmt.Sprintf("(%s) AND (%s) AND (%s) AND (%s)", metricFilter, namespaceFilter, resourceTypeFilter, resourceNameFilter)
-	//rable := [4]string{metricFilter, namespaceFilter, resourceTypeFilter, resourceNameFilter}
-	//mergedFilters := strings.Join(rable, " AND ")
-	foo, err :=
-		// TODO(kawych): normal timestamps, normal alignment period...
-		p.service.Projects.TimeSeries.List(project).Filter(mergedFilters).IntervalStartTime("2017-06-01T15:00:00Z").IntervalEndTime("2017-06-01T14:00:00Z").AggregationPerSeriesAligner("ALIGN_MEAN").AggregationAlignmentPeriod("3600s").Do()
+
+	var nameFilters []string = make([]string, len(name))
+	for i := 0; i < len(name); i++ {
+		nameFilters[i] = fmt.Sprintf("metric.label.%s_name = \"%s\"", objectKinds_v2[kind.Kind], name[i])
+	}
+	nameFilter := strings.Join(nameFilters, " OR ")
+	return fmt.Sprintf("(%s) AND (%s)", metricFilter, nameFilter), nil
+}
+
+func (p* incrementalTestingProvider) additionalFilterForResource(groupResource schema.GroupResource, namespace string) (map[string]string, error) {
+	group, err := api.Registry.Group(groupResource.Group)
 	if err != nil {
-		glog.Fatalf("Failed request to stackdriver api: %s", err)
+		return nil, err
+	}
+	kind, err := api.Registry.RESTMapper().KindFor(groupResource.WithVersion(group.GroupVersion.Version))
+	if err != nil {
+		glog.Errorf("valueFor failed secondly with: %s", err)
+		return nil, err
+	}
+	if namespace == "" {
+		return map[string]string{"type": objectKinds[kind.Kind], "namespace_name": namespace}, nil
+	}
+	return map[string]string{"type": objectKinds[kind.Kind]}, nil
+}
+
+func (p *incrementalTestingProvider) valueFor(groupResource schema.GroupResource, metricName string, namespaced bool, metricFilter string, groupByFields []string, additionalFilter map[string]string) (int64, error) {
+	project := fmt.Sprintf("projects/%s", p.config.Project)
+	endTime := time.Now()
+	startTime := endTime.Add(-p.rateInterval)
+	request := p.service.Projects.TimeSeries.List(project)
+	request = request.Filter(metricFilter)
+	request = request.IntervalStartTime(startTime.Format("2006-01-02T15:04:05Z")).IntervalEndTime(endTime.Format("2006-01-02T15:04:05Z"))
+	// TODO(kawych): don't use cross-series reducer
+	request = request.AggregationPerSeriesAligner("ALIGN_MEAN").AggregationAlignmentPeriod(fmt.Sprintf("%vs", int64(p.rateInterval.Seconds()))).AggregationCrossSeriesReducer("REDUCE_MEAN")
+	request = request.AggregationGroupByFields(groupByFields...)
+	foo, err := request.Do()
+	if err != nil {
+		return 0, err
 	}
 
-	value := int64(*foo.TimeSeries[0].Points[0].Value.DoubleValue) // TODO(kawych) make sure that this value is correct
+	value, err := getMetricValueFromResponse(*foo, additionalFilter)
+	if err != nil {
+		return 0, err
+	}
 
-	//metrics := make([]provider.MetricInfo, len(foo.MetricDescriptors))
-	glog.Infof("value for metric, groupResource: %s, metricName: %s, namespaced: %v", groupResource, metricName, namespaced)
 	info := provider.MetricInfo{
 		GroupResource: groupResource,
 		Metric: metricName,
@@ -131,7 +221,7 @@ func (p *incrementalTestingProvider) metricFor(value int64, groupResource schema
 		},
 		MetricName: metricName,
 		Timestamp: metav1.Time{time.Now()},
-		Value: *resource.NewMilliQuantity(value * 100, resource.DecimalSI),
+		Value: *resource.NewMilliQuantity(value * 1000, resource.DecimalSI),
 	}, nil
 }
 
@@ -157,7 +247,7 @@ func (p *incrementalTestingProvider) metricsFor(totalValue int64, groupResource 
 	}
 
 	for i := range res {
-		res[i].Value = *resource.NewMilliQuantity(100 * totalValue / int64(len(res)), resource.DecimalSI)
+		res[i].Value = *resource.NewMilliQuantity(1000 * totalValue / int64(len(res)), resource.DecimalSI)
 	}
 
 	//return p.metricFor(value, groupResource, "", name, metricName)
@@ -167,22 +257,23 @@ func (p *incrementalTestingProvider) metricsFor(totalValue int64, groupResource 
 }
 
 func (p *incrementalTestingProvider) GetRootScopedMetricByName(groupResource schema.GroupResource, name string, metricName string) (*custom_metrics.MetricValue, error) {
-	glog.Infof("getrootscopedmetricbyname, groupResource: %s, metricName: %s, name: %s", groupResource, metricName, name)
-	value, err := p.valueFor(groupResource, metricName, false, "", name)
+	metricsFilter, err := p.metricFilterForResource(groupResource, []string{name}, metricName)
+	if err != nil {
+		return nil, err
+	}
+	groupByFields := []string{"metric.label.type"}
+	additionalFilter, err := p.additionalFilterForResource(groupResource, "")
+	if err != nil {
+		return nil, err
+	}
+	value, err := p.valueFor(groupResource, metricName, false, metricsFilter, groupByFields, additionalFilter)
 	if err != nil {
 		return nil, err
 	}
 	return p.metricFor(value, groupResource, "", name, metricName)
 }
 
-
 func (p *incrementalTestingProvider) GetRootScopedMetricBySelector(groupResource schema.GroupResource, selector labels.Selector, metricName string) (*custom_metrics.MetricValueList, error) {
-	glog.Infof("getrootscopedmetricbyselector, groupResource: %s, metricName: %s", groupResource, metricName)
-	totalValue, err := p.valueFor(groupResource, metricName, false, "", "tratatata") // TODO(kawych) retrieve the actual name
-	if err != nil {
-		return nil, err
-	}
-
 	// TODO: work for objects not in core v1
 	matchingObjectsRaw, err := p.client.RESTClient().Get().
 			Resource(groupResource.Resource).
@@ -192,25 +283,46 @@ func (p *incrementalTestingProvider) GetRootScopedMetricBySelector(groupResource
 	if err != nil {
 		return nil, err
 	}
+	resourceNames, err := getResourceNames(matchingObjectsRaw)
+	if err != nil {
+		return nil, err
+	}
+	metricsFilter, err := p.metricFilterForResource(groupResource, resourceNames, metricName)
+	if err != nil {
+		return nil, err
+	}
+	groupByFields := []string{"metric.label.type"}
+	additionalFilter, err := p.additionalFilterForResource(groupResource, "")
+	if err != nil {
+		return nil, err
+	}
+	totalValue, err := p.valueFor(groupResource, metricName, false, metricsFilter, groupByFields, additionalFilter)
+	if err != nil {
+		return nil, err
+	}
 	return p.metricsFor(totalValue, groupResource, metricName, matchingObjectsRaw)
 }
 
 func (p *incrementalTestingProvider) GetNamespacedMetricByName(groupResource schema.GroupResource, namespace string, name string, metricName string) (*custom_metrics.MetricValue, error) {
-	glog.Infof("getnamespacedmetricbyname, groupResource: %s, namespace: %s, metricName: %s, name: %s", groupResource, namespace, metricName, name)
-	value, err := p.valueFor(groupResource, metricName, true, namespace, name)
+	metricsFilter, err := p.metricFilterForResource(groupResource, []string{name}, metricName)
 	if err != nil {
 		return nil, err
 	}
+	groupByFields := []string{"metric.label.type", "metric.label.namespace_name"}
+	additionalFilter, err := p.additionalFilterForResource(groupResource, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	value, err := p.valueFor(groupResource, metricName, true, metricsFilter, groupByFields, additionalFilter)
+	if err != nil {
+		return nil, err
+	}
+
 	return p.metricFor(value, groupResource, namespace, name, metricName)
 }
 
 func (p *incrementalTestingProvider) GetNamespacedMetricBySelector(groupResource schema.GroupResource, namespace string, selector labels.Selector, metricName string) (*custom_metrics.MetricValueList, error) {
-	glog.Infof("getnamespacedmetricbyselector, groupResource: %s, namespace: %s, metricName: %s", groupResource, namespace, metricName)
-	totalValue, err := p.valueFor(groupResource, metricName, true, namespace, "tratatata") // TODO(kawych) retrieve the actual name
-	if err != nil {
-		return nil, err
-	}
-
 	// TODO: work for objects not in core v1
 	matchingObjectsRaw, err := p.client.RESTClient().Get().
 			Namespace(namespace).
@@ -221,9 +333,29 @@ func (p *incrementalTestingProvider) GetNamespacedMetricBySelector(groupResource
 	if err != nil {
 		return nil, err
 	}
+	resourceNames, err := getResourceNames(matchingObjectsRaw)
+	if err != nil {
+		return nil, err
+	}
+
+	metricsFilter, err := p.metricFilterForResource(groupResource, resourceNames, metricName)
+	if err != nil {
+		return nil, err
+	}
+	groupByFields := []string{"metric.label.type", "metric.label.namespace_name"}
+	additionalFilter, err := p.additionalFilterForResource(groupResource, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	totalValue, err := p.valueFor(groupResource, metricName, true, metricsFilter, groupByFields, additionalFilter)
+	if err != nil {
+		return nil, err
+	}
 	return p.metricsFor(totalValue, groupResource, metricName, matchingObjectsRaw)
 }
 
+// TODO(kawych): add proper implementation
 func (p *incrementalTestingProvider) ListAllMetrics() []provider.MetricInfo {
 	// TODO(kawych)
 	// - filter only type GAUGE (so that we can aggregate)
@@ -253,4 +385,17 @@ func (p *incrementalTestingProvider) ListAllMetrics() []provider.MetricInfo {
 		}
 	}
 	return metrics
+}
+
+func getResourceNames(list runtime.Object) ([]string, error) {
+	resourceNames := []string{}
+	err := apimeta.EachListItem(list, func(item runtime.Object) error {
+		objMeta := item.(metav1.ObjectMetaAccessor).GetObjectMeta()
+		resourceNames = append(resourceNames, objMeta.GetName())
+		return nil
+	})
+	if err == nil {
+		glog.Infof("resource names: ", resourceNames)
+	}
+	return resourceNames, err
 }

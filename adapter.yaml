@@ -14,7 +14,7 @@ metadata:
     run: uber-adapter
     k8s-app: uber-adapter
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       run: uber-adapter

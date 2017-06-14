@@ -24,6 +24,7 @@ import (
 
 	"k8s.io/custom-metrics-boilerplate/pkg/cmd/server"
 	"k8s.io/custom-metrics-boilerplate/pkg/sample-cmd/provider"
+	"time"
 )
 
 // NewCommandStartMaster provides a CLI handler for 'start master' command
@@ -88,7 +89,7 @@ func (o SampleAdapterServerOptions) RunCustomMetricsAdapterServer(stopCh <-chan 
 		return fmt.Errorf("unable to construct lister client to initialize provider: %v", err)
 	}
 
-	cmProvider := provider.NewFakeProvider(client)
+	cmProvider := provider.NewFakeProvider(client, 5 * time.Minute)
 
 	server, err := config.Complete().New(cmProvider)
 	if err != nil {
