@@ -17,13 +17,13 @@ package provider
  * TODO(kawych):
  * - Return one item per resource. Currently one item per resource is returned, but the metric
  *   value is equal to aggregated metric values from multiple time series.
- * - Don't hardcode resource type names.
  */
 
 import (
 	"time"
 	"fmt"
 	"strings"
+	"encoding/json"
 
 	"github.com/golang/glog"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -55,21 +55,9 @@ type incrementalTestingProvider struct {
 	config *config.GceConfig
 
 	rateInterval time.Duration
-}
 
-// TODO(kawych) think of something better than hardcoding
-var objectKinds map[string]string = map[string]string{
-	"Pod": "pod",
-	"Service": "service",
-	"Namespace": "ns",
-	"Deployment": "deployment",
-}
-
-var objectKinds_v2 map[string]string = map[string]string{
-	"Pod": "pod",
-	"Service": "service",
-	"Namespace": "namespace",
-	"Deployment": "deployment",
+	// TODO(kawych): think about when should it be obtained...
+	resourceNamer map[string]map[string]bool
 }
 
 func NewFakeProvider(client coreclient.CoreV1Interface, rateInterval time.Duration) provider.CustomMetricsProvider {
@@ -83,25 +71,21 @@ func NewFakeProvider(client coreclient.CoreV1Interface, rateInterval time.Durati
 	if err != nil {
 		glog.Fatalf("Failed to get GCE config: %v", err)
 	}
+	namer, err := getResourceNamer(client)
+	if err != nil {
+		glog.Fatalf("Failed to create resource namer")
+	}
 	return &incrementalTestingProvider{
 		client: client,
 		values: make(map[provider.MetricInfo]int64),
 		service: stackdriverService,
 		config: gceConf,
 		rateInterval: rateInterval,
+		resourceNamer: namer,
 	}
 }
 
-func matchesFilter(timeSeries *stackdriver.TimeSeries, filter map[string]string) bool {
-	for k, v := range filter {
-		if timeSeries.Metric.Labels[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
-func getMetricValueFromResponse(response stackdriver.ListTimeSeriesResponse, filter map[string]string) (int64, error) {
+func (p *incrementalTestingProvider) getMetricValueFromResponse(groupResource schema.GroupResource, namespace string, response stackdriver.ListTimeSeriesResponse) (int64, error) {
 	if len(response.TimeSeries) < 1 {
 		return 0, fmt.Errorf("Expected at least one time series from Stackdriver, but received %v", len(response.TimeSeries))
 	}
@@ -109,7 +93,11 @@ func getMetricValueFromResponse(response stackdriver.ListTimeSeriesResponse, fil
 	// Stackdriver API doesn't allow complex label filtering (i.e. "label1 = x AND (label2 = y OR label2 = z)"),
 	// therefore only part of the filters is passed and remaining filtering is done here.
 	for _, series := range response.TimeSeries {
-		if matchesFilter(series, filter) {
+		ok, err := p.matchesAdditionalRequirements(groupResource, namespace, series)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
 			if len(series.Points) != 1 {
 				return 0, fmt.Errorf("Expected exactly one Point in TimeSeries from Stackdriver, but received %v", len(series.Points))
 			}
@@ -124,7 +112,7 @@ func getMetricValueFromResponse(response stackdriver.ListTimeSeriesResponse, fil
 			}
 		}
 	}
-	return 0, fmt.Errorf("Received %v time series from Stackdriver, but non of them matches filters. Series here: %s, filters here: %s", len(response.TimeSeries), response.TimeSeries, filter)
+	return 0, fmt.Errorf("Received %v time series from Stackdriver, but non of them matches filters. Series here: %s, groupResource = %s, namespace = %s", len(response.TimeSeries), response.TimeSeries, groupResource, namespace)
 }
 
 func (p* incrementalTestingProvider) groupByFieldsForResource(namespace string) []string {
@@ -132,6 +120,54 @@ func (p* incrementalTestingProvider) groupByFieldsForResource(namespace string) 
 		return []string{"metric.label.type"}
 	}
 		return []string{"metric.label.type", "metric.label.namespace_name"}
+}
+
+func getResourceNamer(client coreclient.CoreV1Interface) (map[string]map[string]bool, error) {
+	rawData, err := client.RESTClient().Get().Do().Raw()
+	if err != nil {
+		return nil, err
+	}
+	resultMap := map[string]map[string]bool{}
+	var rawMap map[string]interface{}
+	err = json.Unmarshal(rawData, &rawMap)
+	if err != nil {
+		return nil, err
+	}
+	resourcesList, ok := rawMap["resources"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("conversion error0")
+	}
+	for _, resource := range resourcesList {
+		resource, ok := resource.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("conversion error1")
+		}
+		resourceKind, ok := resource["kind"].(string)
+		if !ok {
+			return nil, fmt.Errorf("conversion error2")
+		}
+		resourceName := strings.ToLower(resourceKind)
+		shortNames, ok := resource["shortNames"].([]interface{})
+		if !ok {
+			shortNames = []interface{}{}
+		}
+		allNames := map[string]bool{resourceName: true}
+		// Preserve shortcuts that are already there
+		if current, ok := resultMap[resourceKind]; ok {
+			for k, v := range current {
+				allNames[k] = v
+			}
+		}
+		for _, shortName := range shortNames {
+			shortName, ok := shortName.(string)
+			if !ok {
+				return nil, fmt.Errorf("conversion error3")
+			}
+			allNames[shortName] = true
+		}
+		resultMap[resourceKind] = allNames
+	}
+	return resultMap, nil
 }
 
 func (p* incrementalTestingProvider) metricFilterForResource(groupResource schema.GroupResource, name []string, metricName string) (string, error) {
@@ -149,29 +185,30 @@ func (p* incrementalTestingProvider) metricFilterForResource(groupResource schem
 
 	var nameFilters []string = make([]string, len(name))
 	for i := 0; i < len(name); i++ {
-		nameFilters[i] = fmt.Sprintf("metric.label.%s_name = \"%s\"", objectKinds_v2[kind.Kind], name[i])
+		nameFilters[i] = fmt.Sprintf("metric.label.%s_name = \"%s\"", strings.ToLower(kind.Kind), name[i])
 	}
 	nameFilter := strings.Join(nameFilters, " OR ")
 	return fmt.Sprintf("(%s) AND (%s)", metricFilter, nameFilter), nil
 }
 
-func (p* incrementalTestingProvider) additionalFilterForResource(groupResource schema.GroupResource, namespace string) (map[string]string, error) {
+func (p* incrementalTestingProvider) matchesAdditionalRequirements(groupResource schema.GroupResource, namespace string, timeSeries *stackdriver.TimeSeries) (bool, error) {
 	group, err := api.Registry.Group(groupResource.Group)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	kind, err := api.Registry.RESTMapper().KindFor(groupResource.WithVersion(group.GroupVersion.Version))
 	if err != nil {
 		glog.Errorf("valueFor failed secondly with: %s", err)
-		return nil, err
+		return false, err
 	}
-	if namespace == "" {
-		return map[string]string{"type": objectKinds[kind.Kind], "namespace_name": namespace}, nil
+	allowedTypes, ok := p.resourceNamer[kind.Kind]
+	if !ok {
+		return false, fmt.Errorf("unknown resource: %s", kind.Kind)
 	}
-	return map[string]string{"type": objectKinds[kind.Kind]}, nil
+	return allowedTypes[timeSeries.Metric.Labels["type"]] && timeSeries.Metric.Labels["namespace_name"] == namespace, nil
 }
 
-func (p *incrementalTestingProvider) valueFor(groupResource schema.GroupResource, metricName string, namespaced bool, metricFilter string, groupByFields []string, additionalFilter map[string]string) (int64, error) {
+func (p *incrementalTestingProvider) valueFor(groupResource schema.GroupResource, metricName string, namespace string, metricFilter string, groupByFields []string) (int64, error) {
 	project := fmt.Sprintf("projects/%s", p.config.Project)
 	endTime := time.Now()
 	startTime := endTime.Add(-p.rateInterval)
@@ -186,7 +223,7 @@ func (p *incrementalTestingProvider) valueFor(groupResource schema.GroupResource
 		return 0, err
 	}
 
-	value, err := getMetricValueFromResponse(*foo, additionalFilter)
+	value, err := p.getMetricValueFromResponse(groupResource, namespace, *foo)
 	if err != nil {
 		return 0, err
 	}
@@ -194,7 +231,7 @@ func (p *incrementalTestingProvider) valueFor(groupResource schema.GroupResource
 	info := provider.MetricInfo{
 		GroupResource: groupResource,
 		Metric: metricName,
-		Namespaced: namespaced,
+		Namespaced: namespace != "",
 	}
 
 	p.values[info] = value
@@ -262,11 +299,8 @@ func (p *incrementalTestingProvider) GetRootScopedMetricByName(groupResource sch
 		return nil, err
 	}
 	groupByFields := []string{"metric.label.type"}
-	additionalFilter, err := p.additionalFilterForResource(groupResource, "")
-	if err != nil {
-		return nil, err
-	}
-	value, err := p.valueFor(groupResource, metricName, false, metricsFilter, groupByFields, additionalFilter)
+
+	value, err := p.valueFor(groupResource, metricName, "", metricsFilter, groupByFields)
 	if err != nil {
 		return nil, err
 	}
@@ -292,11 +326,8 @@ func (p *incrementalTestingProvider) GetRootScopedMetricBySelector(groupResource
 		return nil, err
 	}
 	groupByFields := []string{"metric.label.type"}
-	additionalFilter, err := p.additionalFilterForResource(groupResource, "")
-	if err != nil {
-		return nil, err
-	}
-	totalValue, err := p.valueFor(groupResource, metricName, false, metricsFilter, groupByFields, additionalFilter)
+
+	totalValue, err := p.valueFor(groupResource, metricName, "", metricsFilter, groupByFields)
 	if err != nil {
 		return nil, err
 	}
@@ -309,12 +340,8 @@ func (p *incrementalTestingProvider) GetNamespacedMetricByName(groupResource sch
 		return nil, err
 	}
 	groupByFields := []string{"metric.label.type", "metric.label.namespace_name"}
-	additionalFilter, err := p.additionalFilterForResource(groupResource, namespace)
-	if err != nil {
-		return nil, err
-	}
 
-	value, err := p.valueFor(groupResource, metricName, true, metricsFilter, groupByFields, additionalFilter)
+	value, err := p.valueFor(groupResource, metricName, namespace, metricsFilter, groupByFields)
 	if err != nil {
 		return nil, err
 	}
@@ -343,12 +370,8 @@ func (p *incrementalTestingProvider) GetNamespacedMetricBySelector(groupResource
 		return nil, err
 	}
 	groupByFields := []string{"metric.label.type", "metric.label.namespace_name"}
-	additionalFilter, err := p.additionalFilterForResource(groupResource, namespace)
-	if err != nil {
-		return nil, err
-	}
 
-	totalValue, err := p.valueFor(groupResource, metricName, true, metricsFilter, groupByFields, additionalFilter)
+	totalValue, err := p.valueFor(groupResource, metricName, namespace, metricsFilter, groupByFields)
 	if err != nil {
 		return nil, err
 	}
