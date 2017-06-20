@@ -1,21 +1,22 @@
 OUT_DIR = build
-PACKAGE = k8s.io/custom-metrics-boilerplate
+PACKAGE = k8s.io/k8s-stackdriver-adapter
 PREFIX = gcr.io/kawych-test
 TAG = 1.0
 
 PKG := $(shell find pkg/* -type f)
+CMD := $(shell find cmd/* -type f)
 
 deps:
 	glide install --strip-vendor
 
-build/sample: sample-main.go $(PKG)
-	go build -a -o $(OUT_DIR)/sample sample-main.go
+build/adapter: adapter.go $(PKG) $(CMD)
+	go build -a -o $(OUT_DIR)/adapter adapter.go
 
-docker: build/sample
-	docker build --pull -t ${PREFIX}/custom-metrics-boilerplate:$(TAG) .
+docker: build/adapter
+	docker build --pull -t ${PREFIX}/k8s-stackdriver-adapter:$(TAG) .
 
 push: docker
-	gcloud docker -- push ${PREFIX}/custom-metrics-boilerplate:$(TAG)
+	gcloud docker -- push ${PREFIX}/k8s-stackdriver-adapter:$(TAG)
 
 clean:
-	rm -rf build
+	rm -rf build apiserver.local.config

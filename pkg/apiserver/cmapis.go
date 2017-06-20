@@ -24,9 +24,9 @@ import (
 	genericapi "k8s.io/apiserver/pkg/endpoints"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 
-	specificapi "k8s.io/custom-metrics-boilerplate/pkg/apiserver/installer"
-	"k8s.io/custom-metrics-boilerplate/pkg/provider"
-	metricstorage "k8s.io/custom-metrics-boilerplate/pkg/registry/custom_metrics"
+	specificapi "k8s.io/k8s-stackdriver-adapter/pkg/apiserver/installer"
+	"k8s.io/k8s-stackdriver-adapter/pkg/provider"
+	metricstorage "k8s.io/k8s-stackdriver-adapter/pkg/registry/custom_metrics"
 	"k8s.io/metrics/pkg/apis/custom_metrics"
 )
 

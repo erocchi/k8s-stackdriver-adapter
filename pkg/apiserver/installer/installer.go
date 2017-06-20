@@ -42,7 +42,7 @@ import (
 
 	"github.com/emicklei/go-restful"
 
-	specificcontext "k8s.io/custom-metrics-boilerplate/pkg/apiserver/installer/context"
+	specificcontext "k8s.io/k8s-stackdriver-adapter/pkg/apiserver/installer/context"
 )
 
 // NB: the contents of this file should mostly be a subset of the functionality
