@@ -53,6 +53,8 @@ type stackdriverProvider struct {
 
 	config *config.GceConfig
 
+	// TODO(kawych): maybe another interval for refreshing cache?
+	// TODO(kawych): maybe we should have a cache at all?
 	rateInterval time.Duration
 
 	// TODO(kawych): think about when should it be obtained...
@@ -328,6 +330,10 @@ func (p *stackdriverProvider) GetRootScopedMetricByName(groupResource schema.Gro
 }
 
 func (p *stackdriverProvider) GetRootScopedMetricBySelector(groupResource schema.GroupResource, selector labels.Selector, metricName string) (*custom_metrics.MetricValueList, error) {
+	reqs, err := selector.Requirements()
+	for _, req := range reqs {
+		req.Operator()
+	}
 	// TODO: work for objects not in core v1
 	matchingObjectsRaw, err := p.client.RESTClient().Get().
 			Resource(groupResource.Resource).
@@ -407,6 +413,7 @@ func (p *stackdriverProvider) GetNamespacedMetricBySelector(groupResource schema
 
 // TODO(kawych): add proper implementation
 func (p *stackdriverProvider) ListAllMetrics() []provider.MetricInfo {
+	metrics := []provider.MetricInfo{}
 	// TODO(kawych)
 	// - filter only type GAUGE (so that we can aggregate)
 	// - assign to relevant resource types
@@ -416,25 +423,62 @@ func (p *stackdriverProvider) ListAllMetrics() []provider.MetricInfo {
 	onlyCustom := fmt.Sprintf("metric.type = starts_with(\"%s/\")", p.config.MetricsPrefix)
 	foo, err := p.service.Projects.MetricDescriptors.List(project).Filter(onlyCustom).Do() //TODO(kawych) support errors
 	if err != nil {
-		glog.Fatalf("Failed request to stackdriver api: %s", err)
+		glog.Errorf("Failed request to stackdriver api: %s", err)
+		return metrics
 	}
-	metrics := make([]provider.MetricInfo, len(foo.MetricDescriptors))
 
-	for i := 0; i < len(foo.MetricDescriptors); i++ {
-		namespaced := false
-		for j := 0; j < len(foo.MetricDescriptors[i].Labels); j++ {
-			if foo.MetricDescriptors[i].Labels[j].Key == "namespace_name" {
-				namespaced = true
+	for _, descriptor := range foo.MetricDescriptors {
+		if descriptor.MetricKind == "GAUGE" && descriptor.ValueType == "INT64" || descriptor.ValueType == "DOUBLE" {
+			namespaced := false
+			for _, labelDescriptor := range descriptor.Labels {
+				if labelDescriptor.Key == "namespace_name" {
+					namespaced = true
+				}
+			}
+			resources, err := p.fetchMetric(descriptor.Type)
+			if err != nil {
+				glog.Errorf("unable to fetch metric %s", descriptor.Name)
+				return metrics
+			}
+			for _, resource := range resources {
+				metrics = append(metrics, provider.MetricInfo{
+					GroupResource: schema.GroupResource{Group: "", Resource: resource},
+					Metric: descriptor.Type,
+					Namespaced: namespaced,
+				})
 			}
 		}
-		metrics[i] = provider.MetricInfo{
-			// Resource: pods/services/namespaces/deployments/...
-			GroupResource: schema.GroupResource{Group: "", Resource: "pods"},
-			Metric: foo.MetricDescriptors[i].Type,
-			Namespaced: namespaced,
+	}
+
+	return metrics
+}
+
+func (p *stackdriverProvider) fetchMetric(metricName string) ([]string, error) {
+	project := fmt.Sprintf("projects/%s", p.config.Project)
+	metricFilter := fmt.Sprintf("metric.type = \"%s\"", metricName)
+	endTime := time.Now()
+	startTime := endTime.Add(-p.rateInterval)
+	request := p.service.Projects.TimeSeries.List(project)
+	request = request.Filter(metricFilter)
+	request = request.IntervalStartTime(startTime.Format("2006-01-02T15:04:05Z")).IntervalEndTime(endTime.Format("2006-01-02T15:04:05Z"))
+	request = request.AggregationPerSeriesAligner("ALIGN_MEAN").AggregationAlignmentPeriod(fmt.Sprintf("%vs", int64(p.rateInterval.Seconds())))
+	request = request.AggregationCrossSeriesReducer("REDUCE_MEAN").AggregationGroupByFields("metric.label.type")
+	glog.Infof("request following: %s", request)
+	foo, err := request.Do()
+	if err != nil {
+		return nil, err
+	}
+
+	resources := []string{}
+	for _, series := range foo.TimeSeries {
+		for label, value := range series.Metric.Labels {
+			if label == "type" {
+				// instead desingaluritarize
+				resources = append(resources, value + "s")
+			}
 		}
 	}
-	return metrics
+	return resources, nil
 }
 
 func getResourceNames(list runtime.Object) ([]string, error) {
