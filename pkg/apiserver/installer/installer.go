@@ -217,6 +217,7 @@ func (a *MetricsAPIInstaller) registerResourceHandlers(storage rest.Storage, ws 
 		nameParam,
 		subresourceParam,
 	}
+	// METRIC REGEXP:
 	namespacedPath := scope.ParamName() + "/{" + scope.ArgumentName() + "}/{resource}/{name}/{subresource:*}"
 	namespacedPathPrefix := gpath.Join(a.prefix, scope.ParamName()) + "/"
 	itemPathFn := func(name, namespace, resource, subresource string) bytes.Buffer {

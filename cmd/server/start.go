@@ -89,7 +89,7 @@ func (o SampleAdapterServerOptions) RunCustomMetricsAdapterServer(stopCh <-chan 
 		return fmt.Errorf("unable to construct lister client to initialize provider: %v", err)
 	}
 
-	cmProvider := provider.NewStackdriverProvider(client, 5 * time.Minute)
+	cmProvider := provider.NewStackdriverProvider(client.RESTClient(), 5 * time.Minute)
 
 	server, err := config.Complete().New(cmProvider)
 	if err != nil {

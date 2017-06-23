@@ -19,6 +19,7 @@ package provider
  */
 
 import (
+	//"context"
 	"time"
 	"fmt"
 	"strings"
@@ -26,7 +27,8 @@ import (
 
 	"github.com/golang/glog"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
+	//coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/rest"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -40,12 +42,16 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
+	// for easier faking:
+	//monitoring "cloud.google.com/go/monitoring/apiv3"
+
 	"k8s.io/k8s-stackdriver-adapter/pkg/provider"
 	"k8s.io/k8s-stackdriver-adapter/pkg/config"
 )
 
 type stackdriverProvider struct {
-	client coreclient.CoreV1Interface
+	//client coreclient.CoreV1Interface
+	restClient rest.Interface
 
 	values map[provider.MetricInfo]map[string]int64
 
@@ -61,7 +67,8 @@ type stackdriverProvider struct {
 	resourceNamer map[string]map[string]bool
 }
 
-func NewStackdriverProvider(client coreclient.CoreV1Interface, rateInterval time.Duration) provider.CustomMetricsProvider {
+func NewStackdriverProvider(restClient rest.Interface, rateInterval time.Duration) provider.CustomMetricsProvider {
+	//monClient := monitoring.NewMetricClient(context.Background())
 	// TODO(kawych): move this part to some sensible place
 	oauthClient := oauth2.NewClient(oauth2.NoContext, google.ComputeTokenSource(""))
 	stackdriverService, err := stackdriver.New(oauthClient)
@@ -73,12 +80,12 @@ func NewStackdriverProvider(client coreclient.CoreV1Interface, rateInterval time
 	if err != nil {
 		glog.Fatalf("Failed to get GCE config: %v", err)
 	}
-	namer, err := getResourceNamer(client)
+	namer, err := getResourceNamer(restClient)
 	if err != nil {
 		glog.Fatalf("Failed to create resource namer")
 	}
 	return &stackdriverProvider{
-		client: client,
+		restClient: restClient,
 		values: make(map[provider.MetricInfo]map[string]int64),
 		service: stackdriverService,
 		config: gceConf,
@@ -135,8 +142,8 @@ func (p*stackdriverProvider) groupByFieldsForResource(namespace string) []string
 		return []string{"metric.label.type", "metric.label.namespace_name"}
 }
 
-func getResourceNamer(client coreclient.CoreV1Interface) (map[string]map[string]bool, error) {
-	rawData, err := client.RESTClient().Get().Do().Raw()
+func getResourceNamer(restClient rest.Interface) (map[string]map[string]bool, error) {
+	rawData, err := restClient.Get().Do().Raw()
 	if err != nil {
 		return nil, err
 	}
@@ -330,12 +337,12 @@ func (p *stackdriverProvider) GetRootScopedMetricByName(groupResource schema.Gro
 }
 
 func (p *stackdriverProvider) GetRootScopedMetricBySelector(groupResource schema.GroupResource, selector labels.Selector, metricName string) (*custom_metrics.MetricValueList, error) {
-	reqs, err := selector.Requirements()
+	/*reqs, ok := selector.Requirements()
 	for _, req := range reqs {
 		req.Operator()
-	}
+	}*/
 	// TODO: work for objects not in core v1
-	matchingObjectsRaw, err := p.client.RESTClient().Get().
+	matchingObjectsRaw, err := p.restClient.Get().
 			Resource(groupResource.Resource).
 			VersionedParams(&metav1.ListOptions{LabelSelector: selector.String()}, scheme.ParameterCodec).
 			Do().
@@ -382,7 +389,7 @@ func (p *stackdriverProvider) GetNamespacedMetricByName(groupResource schema.Gro
 
 func (p *stackdriverProvider) GetNamespacedMetricBySelector(groupResource schema.GroupResource, namespace string, selector labels.Selector, metricName string) (*custom_metrics.MetricValueList, error) {
 	// TODO: work for objects not in core v1
-	matchingObjectsRaw, err := p.client.RESTClient().Get().
+	matchingObjectsRaw, err := p.restClient.Get().
 			Namespace(namespace).
 			Resource(groupResource.Resource).
 			VersionedParams(&metav1.ListOptions{LabelSelector: selector.String()}, scheme.ParameterCodec).
@@ -414,10 +421,7 @@ func (p *stackdriverProvider) GetNamespacedMetricBySelector(groupResource schema
 // TODO(kawych): add proper implementation
 func (p *stackdriverProvider) ListAllMetrics() []provider.MetricInfo {
 	metrics := []provider.MetricInfo{}
-	// TODO(kawych)
-	// - filter only type GAUGE (so that we can aggregate)
-	// - assign to relevant resource types
-	// - ...
+
 	glog.Infof("listing all metrics, project: %s, cluster: %s, metric prefix: %s", p.config.Project, p.config.Cluster, p.config.MetricsPrefix)
 	project := fmt.Sprintf("projects/%s", p.config.Project)
 	onlyCustom := fmt.Sprintf("metric.type = starts_with(\"%s/\")", p.config.MetricsPrefix)

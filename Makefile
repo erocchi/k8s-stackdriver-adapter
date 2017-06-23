@@ -9,6 +9,8 @@ CMD := $(shell find cmd/* -type f)
 deps:
 	glide install --strip-vendor
 
+build: build/adapter
+
 build/adapter: adapter.go $(PKG) $(CMD)
 	go build -a -o $(OUT_DIR)/adapter adapter.go
 
@@ -17,6 +19,9 @@ docker: build/adapter
 
 push: docker
 	gcloud docker -- push ${PREFIX}/k8s-stackdriver-adapter:$(TAG)
+
+test: cmd/provider/provider_test.go $(PKG) $(CMD)
+	go test cmd/provider/provider_test.go
 
 clean:
 	rm -rf build apiserver.local.config
