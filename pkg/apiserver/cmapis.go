@@ -27,12 +27,12 @@ import (
 	specificapi "k8s.io/k8s-stackdriver-adapter/pkg/apiserver/installer"
 	"k8s.io/k8s-stackdriver-adapter/pkg/provider"
 	metricstorage "k8s.io/k8s-stackdriver-adapter/pkg/registry/custom_metrics"
-	"k8s.io/metrics/pkg/apis/custom_metrics"
+	"k8s.io/metrics/pkg/apis/events"
 )
 
 func (s *CustomMetricsAdapterServer) InstallCustomMetricsAPI() error {
 
-	groupMeta := registry.GroupOrDie(custom_metrics.GroupName)
+	groupMeta := registry.GroupOrDie(events.GroupName)
 
 	preferredVersionForDiscovery := metav1.GroupVersionForDiscovery{
 		GroupVersion: groupMeta.GroupVersion.String(),

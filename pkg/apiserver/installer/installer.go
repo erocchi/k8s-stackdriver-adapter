@@ -186,41 +186,29 @@ func (a *MetricsAPIInstaller) registerResourceHandlers(storage rest.Storage, ws 
 		}
 
 		ctx = request.WithUserAgent(ctx, req.HeaderParameter("User-Agent"))
-
-		// inject the resource, subresource, and name here so that
-		// we don't have to write custom handler logic
+		name := req.PathParameter("name")
 		resource := req.PathParameter("resource")
-		subresource := req.PathParameter("subresource")
-		ctx = specificcontext.WithResourceInformation(ctx, resource, subresource)
-
+		ctx = specificcontext.WithResourceInformation(ctx, resource,name)
+		
 		return ctx
 	}
 
 	scope := mapping.Scope
-	nameParam := ws.PathParameter("name", "name of the described resource").DataType("string")
+	nameParam := ws.PathParameter("name", "name of the described event").DataType("string")
 	resourceParam := ws.PathParameter("resource", "the name of the resource").DataType("string")
-	subresourceParam := ws.PathParameter("subresource", "the name of the subresource").DataType("string")
-
-	// metrics describing non-namespaced objects (e.g. nodes)
-	rootScopedParams := []*restful.Parameter{
-		resourceParam,
-		nameParam,
-		subresourceParam,
-	}
-	rootScopedPath := "{resource}/{name}/{subresource:*}"
-
-	// metrics describing namespaced objects (e.g. pods)
 	namespaceParam := ws.PathParameter(scope.ArgumentName(), scope.ParamDescription()).DataType("string")
+
 	namespacedParams := []*restful.Parameter{
-		namespaceParam,
-		resourceParam,
 		nameParam,
-		subresourceParam,
+		resourceParam,
+		namespaceParam,
 	}
+
 	// METRIC REGEXP:
-	namespacedPath := scope.ParamName() + "/{" + scope.ArgumentName() + "}/{resource}/{name}/{subresource:*}"
-	namespacedPathPrefix := gpath.Join(a.prefix, scope.ParamName()) + "/"
-	itemPathFn := func(name, namespace, resource, subresource string) bytes.Buffer {
+	namespacedPath := scope.ParamName() + "/{" + scope.ArgumentName() + "}/{resource}/{name}"
+	//namespacedPathPrefix := gpath.Join(a.prefix, scope.ParamName()) + "/"
+
+	/*itemPathFn := func(name, namespace string) bytes.Buffer {
 		var buf bytes.Buffer
 		buf.WriteString(namespacedPathPrefix)
 		buf.WriteString(url.QueryEscape(namespace))
@@ -228,43 +216,8 @@ func (a *MetricsAPIInstaller) registerResourceHandlers(storage rest.Storage, ws 
 		buf.WriteString(url.QueryEscape(resource))
 		buf.WriteString("/")
 		buf.WriteString(url.QueryEscape(name))
-		buf.WriteString("/")
-		buf.WriteString(url.QueryEscape(subresource))
 		return buf
-	}
-
-	namespaceSpecificPath := scope.ParamName() + "/{" + scope.ArgumentName() + "}/metrics/{name:*}"
-	namespaceSpecificParams := []*restful.Parameter{
-		namespaceParam,
-		nameParam,
-	}
-	namespaceSpecificItemPathFn := func(name, namespace, resource, subresource string) bytes.Buffer {
-		var buf bytes.Buffer
-		buf.WriteString(namespacedPathPrefix)
-		buf.WriteString(url.QueryEscape(namespace))
-		buf.WriteString("/metrics/")
-		buf.WriteString(url.QueryEscape(name))
-		return buf
-	}
-	namespaceSpecificCtxFn := func(req *restful.Request) request.Context {
-		var ctx request.Context
-		if ctx != nil {
-			if existingCtx, ok := context.Get(req.Request); ok {
-				ctx = existingCtx
-			}
-		}
-		if ctx == nil {
-			ctx = request.NewContext()
-		}
-
-		ctx = request.WithUserAgent(ctx, req.HeaderParameter("User-Agent"))
-
-		// inject the resource, subresource, and name here so that
-		// we don't have to write custom handler logic
-		ctx = specificcontext.WithResourceInformation(ctx, "metrics", "")
-
-		return ctx
-	}
+	}*/
 
 	mediaTypes, streamMediaTypes := negotiation.MediaTypesForSerializer(a.group.Serializer)
 	allMediaTypes := append(mediaTypes, streamMediaTypes...)
@@ -292,26 +245,9 @@ func (a *MetricsAPIInstaller) registerResourceHandlers(storage rest.Storage, ws 
 	}
 
 	// we need one path for namespaced resources, one for non-namespaced resources
-	doc := "list custom metrics describing an object or objects"
-	reqScope.Namer = rootScopeNaming{scope, a.group.Linker, gpath.Join(a.prefix, rootScopedPath, "/"), "/{subresource}"}
-	rootScopedHandler := metrics.InstrumentRouteFunc("LIST", "custom-metrics", handlers.ListResource(lister, nil, reqScope, false, a.minRequestTimeout))
-
-	// install the root-scoped route
-	rootScopedRoute := ws.GET(rootScopedPath).To(rootScopedHandler).
-		Doc(doc).
-		Param(ws.QueryParameter("pretty", "If 'true', then the output is pretty printed.")).
-		Operation("list"+kind).
-		Produces(allMediaTypes...).
-		Returns(http.StatusOK, "OK", versionedList).
-		Writes(versionedList)
-	if err := addObjectParams(ws, rootScopedRoute, versionedListOptions); err != nil {
-		return err
-	}
-	addParams(rootScopedRoute, rootScopedParams)
-	ws.Route(rootScopedRoute)
-
+	doc := "list events"
 	// install the namespace-scoped route
-	reqScope.Namer = scopeNaming{scope, a.group.Linker, itemPathFn, false}
+	reqScope.Namer = scopeNaming{scope, a.group.Linker, nil, false}
 	namespacedHandler := metrics.InstrumentRouteFunc("LIST", "custom-metrics-namespaced", handlers.ListResource(lister, nil, reqScope, false, a.minRequestTimeout))
 	namespacedRoute := ws.GET(namespacedPath).To(namespacedHandler).
 		Doc(doc).
@@ -325,24 +261,6 @@ func (a *MetricsAPIInstaller) registerResourceHandlers(storage rest.Storage, ws 
 	}
 	addParams(namespacedRoute, namespacedParams)
 	ws.Route(namespacedRoute)
-
-	// install the special route for metrics describing namespaces (last b/c we modify the context func)
-	reqScope.ContextFunc = namespaceSpecificCtxFn
-	reqScope.Namer = scopeNaming{scope, a.group.Linker, namespaceSpecificItemPathFn, false}
-	namespaceSpecificHandler := metrics.InstrumentRouteFunc("LIST", "custom-metrics-for-namespace", handlers.ListResource(lister, nil, reqScope, false, a.minRequestTimeout))
-	namespaceSpecificRoute := ws.GET(namespaceSpecificPath).To(namespaceSpecificHandler).
-		Doc(doc).
-		Param(ws.QueryParameter("pretty", "If 'true', then the output is pretty printed.")).
-		Operation("read"+kind+"ForNamespace").
-		Produces(allMediaTypes...).
-		Returns(http.StatusOK, "OK", versionedList).
-		Writes(versionedList)
-	if err := addObjectParams(ws, namespaceSpecificRoute, versionedListOptions); err != nil {
-		return err
-	}
-	addParams(namespaceSpecificRoute, namespaceSpecificParams)
-	ws.Route(namespaceSpecificRoute)
-
 	return nil
 }
 

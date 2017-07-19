@@ -27,7 +27,7 @@ import (
 	genericapiserver "k8s.io/apiserver/pkg/server"
 
 	"k8s.io/k8s-stackdriver-adapter/pkg/provider"
-	"k8s.io/metrics/pkg/apis/custom_metrics/install"
+	"k8s.io/metrics/pkg/apis/events/install"
 )
 
 var (
@@ -60,9 +60,9 @@ type Config struct {
 }
 
 // CustomMetricsAdapterServer contains state for a Kubernetes cluster master/api server.
-type CustomMetricsAdapterServer struct {
+type EventsAdapterServer struct {
 	GenericAPIServer *genericapiserver.GenericAPIServer
-	Provider         provider.CustomMetricsProvider
+	Provider         provider.EventsProvider
 }
 
 type completedConfig struct {
@@ -87,15 +87,15 @@ func (c *Config) SkipComplete() completedConfig {
 }
 
 // New returns a new instance of CustomMetricsAdapterServer from the given config.
-func (c completedConfig) New(cmProvider provider.CustomMetricsProvider) (*CustomMetricsAdapterServer, error) {
+func (c completedConfig) New(evProvider provider.EventsProvider) (*EventsAdapterServer, error) {
 	genericServer, err := c.Config.GenericConfig.SkipComplete().New() // completion is done in Complete, no need for a second time
 	if err != nil {
 		return nil, err
 	}
 
-	s := &CustomMetricsAdapterServer{
+	s := &EventsAdapterServer{
 		GenericAPIServer: genericServer,
-		Provider: cmProvider,
+		Provider: evProvider,
 	}
 
 	if err := s.InstallCustomMetricsAPI(); err != nil {

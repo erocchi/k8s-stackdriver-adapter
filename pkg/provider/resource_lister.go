@@ -21,18 +21,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-type customMetricsResourceLister struct {
-	provider CustomMetricsProvider
+type eventResourceLister struct {
+	provider EventsProvider
 }
 
-func NewResourceLister(provider CustomMetricsProvider) handlers.APIResourceLister {
-	return &customMetricsResourceLister{
+func NewResourceLister(provider EventsProvider) handlers.APIResourceLister {
+	return &eventsResourceLister{
 		provider: provider,
 	}
 }
 
-func (l *customMetricsResourceLister) ListAPIResources() []metav1.APIResource {
-	metrics := l.provider.ListAllMetrics()
+func (l *eventsResourceLister) ListAPIResources() []metav1.APIResource {
+	/*metrics := l.provider.ListAllMetrics()
 	resources := make([]metav1.APIResource, len(metrics))
 
 	for i, metric := range metrics {
@@ -44,5 +44,13 @@ func (l *customMetricsResourceLister) ListAPIResources() []metav1.APIResource {
 		}
 	}
 
-	return resources
+	return resources*/
+	resources := make([]metav1.APIResource,1)
+	resources[0] = metav1.APIResource{
+		Name: v1events,
+		Namespaced: "default",
+		Kind: "EventValueList",
+		Verbs: metav1.Verbs{"get"},
+	}
+
 }

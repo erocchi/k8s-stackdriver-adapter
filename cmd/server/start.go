@@ -21,10 +21,13 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
+	stackdriver "google.golang.org/api/monitoring/v3"
 
 	"k8s.io/k8s-stackdriver-adapter/pkg/cmd/server"
 	"k8s.io/k8s-stackdriver-adapter/cmd/provider"
 	"time"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
 
 // NewCommandStartMaster provides a CLI handler for 'start master' command
@@ -61,7 +64,6 @@ func NewCommandStartSampleAdapterServer(out, errOut io.Writer, stopCh <-chan str
 			"kubeconfig file pointing at the 'core' kubernetes server with enough rights to list "+
 			"any described objets")
 
-
 	return cmd
 }
 
@@ -88,8 +90,12 @@ func (o SampleAdapterServerOptions) RunCustomMetricsAdapterServer(stopCh <-chan 
 	if err != nil {
 		return fmt.Errorf("unable to construct lister client to initialize provider: %v", err)
 	}
-
-	cmProvider := provider.NewStackdriverProvider(client.RESTClient(), 5 * time.Minute)
+	oauthClient := oauth2.NewClient(oauth2.NoContext, google.ComputeTokenSource(""))
+	stackdriverService, err := stackdriver.New(oauthClient)
+	if err != nil {
+		return fmt.Errorf("Failed to create Stackdriver client: %v", err)
+	}
+	cmProvider := provider.NewStackdriverProvider(client.RESTClient(), stackdriverService, 5 * time.Minute)
 
 	server, err := config.Complete().New(cmProvider)
 	if err != nil {

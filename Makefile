@@ -1,6 +1,6 @@
 OUT_DIR = build
 PACKAGE = k8s.io/k8s-stackdriver-adapter
-PREFIX = gcr.io/kawych-test
+PREFIX = gcr.io/erocchi-gke-dev-1attempt
 TAG = 1.0
 
 PKG := $(shell find pkg/* -type f)

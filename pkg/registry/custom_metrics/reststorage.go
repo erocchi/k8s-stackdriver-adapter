@@ -20,106 +20,58 @@ import (
 	"fmt"
 
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	specificinstaller "k8s.io/k8s-stackdriver-adapter/pkg/apiserver/installer/context"
 	"k8s.io/k8s-stackdriver-adapter/pkg/provider"
-	"k8s.io/metrics/pkg/apis/custom_metrics"
+	"k8s.io/metrics/pkg/apis/events"
+
 )
 
 type REST struct {
-	cmProvider provider.CustomMetricsProvider
+	evProvider provider.EventsProvider
 }
 
 var _ rest.Storage = &REST{}
 var _ rest.Lister = &REST{}
 
-func NewREST(cmProvider provider.CustomMetricsProvider) *REST {
+func NewREST(evProvider provider.EventsProvider) *REST {
 	return &REST{
-		cmProvider: cmProvider,
+		evProvider: evProvider,
 	}
 }
 
 // Implement Storage
 
 func (r *REST) New() runtime.Object {
-	return &custom_metrics.MetricValue{}
+	return &events.EventValue{}
 }
 
 // Implement Lister
 
 func (r *REST) NewList() runtime.Object {
-	return &custom_metrics.MetricValueList{}
+	return &events.EventValueList{}
 }
 
-func (r *REST) List(ctx genericapirequest.Context, options *metainternalversion.ListOptions) (runtime.Object, error) {
-	// populate the label selector, defaulting to all
-	selector := labels.Everything()
-	if options != nil && options.LabelSelector != nil {
-		selector = options.LabelSelector
-	}
 
-	// grab the name, if present, from the field selector list options
-	// (this is how the list handler logic injects it)
-	// (otherwise we'd have to write a custom list handler)
-	name := "*"
-	if options != nil && options.FieldSelector != nil {
-		if nameMatch, required := options.FieldSelector.RequiresExactMatch("metadata.name"); required {
-			name = nameMatch
-		}
-	}
+func (r *REST) List(ctx genericapirequest.Context, options *metainternalversion.ListOptions) (runtime.Object, error) {
+
 
 	namespace := genericapirequest.NamespaceValue(ctx)
 
-	resourceRaw, metricName, ok := specificinstaller.ResourceInformationFrom(ctx)
+	resourceRaw, eventName, ok := specificinstaller.ResourceInformationFrom(ctx)
 	if !ok {
-		return nil, fmt.Errorf("unable to get resource and metric name from request")
+		return nil, fmt.Errorf("unable to get events name from request")
 	}
-
-	groupResource := schema.ParseGroupResource(resourceRaw)
-
-	// handle metrics describing namespaces
-	if namespace != "" && resourceRaw == "metrics" {
-		// namespace-describing metrics have a path of /namespaces/$NS/metrics/$metric,
-		groupResource = schema.GroupResource{Resource: "namespaces"}
-		metricName = name
-		name = namespace
-		namespace = ""
+	// handle events
+	if resourceRaw != "events" {
+		return nil, fmt.Errorf("Usage : namespaces/{namespace}/events/{eventName}")
 	}
-
-	// handle namespaced and root metrics
-	if name == "*" {
-		return r.handleWildcardOp(namespace, groupResource, selector, metricName)
-	} else {
-		return r.handleIndividualOp(namespace, groupResource, name, metricName)
-	}
+	return GetNamespacedEventsByName(namespace,eventName)
 }
 
-func (r *REST) handleIndividualOp(namespace string, groupResource schema.GroupResource, name string, metricName string) (*custom_metrics.MetricValueList, error) {
-	var err error
-	var singleRes *custom_metrics.MetricValue
-	if namespace == "" {
-		singleRes, err = r.cmProvider.GetRootScopedMetricByName(groupResource, name, metricName)
-	} else {
-		singleRes, err = r.cmProvider.GetNamespacedMetricByName(groupResource, namespace, name, metricName)
-	}
+func GetNamespacedEventsByName( namespace, eventName string) (*events.EventValue, error){
+	return nil,fmt.Errorf("Hello wolrd! namespace: %s eventName: %s ", namespace, eventName)
 
-	if err != nil {
-		return nil, err
-	}
-
-	return &custom_metrics.MetricValueList{
-		Items: []custom_metrics.MetricValue{*singleRes},
-	}, nil
-}
-
-func (r *REST) handleWildcardOp(namespace string, groupResource schema.GroupResource, selector labels.Selector, metricName string) (*custom_metrics.MetricValueList, error) {
-	if namespace == "" {
-		return r.cmProvider.GetRootScopedMetricBySelector(groupResource, selector, metricName)
-	} else {
-		return r.cmProvider.GetNamespacedMetricBySelector(groupResource, namespace, selector, metricName)
-	}
 }
