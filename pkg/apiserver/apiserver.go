@@ -1,12 +1,9 @@
 /*
 Copyright 2017 The Kubernetes Authors.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
     http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,7 +24,7 @@ import (
 	genericapiserver "k8s.io/apiserver/pkg/server"
 
 	"k8s.io/k8s-stackdriver-adapter/pkg/provider"
-	"k8s.io/metrics/pkg/apis/events/install"
+	"k8s.io/metrics/pkg/apis/custom_metrics/install"	//TODO chgNmGroup
 )
 
 var (
@@ -59,7 +56,7 @@ type Config struct {
 	GenericConfig *genericapiserver.Config
 }
 
-// CustomMetricsAdapterServer contains state for a Kubernetes cluster master/api server.
+// EventsAdapterServer contains state for a Kubernetes cluster master/api server.
 type EventsAdapterServer struct {
 	GenericAPIServer *genericapiserver.GenericAPIServer
 	Provider         provider.EventsProvider
@@ -86,7 +83,7 @@ func (c *Config) SkipComplete() completedConfig {
 	return completedConfig{c}
 }
 
-// New returns a new instance of CustomMetricsAdapterServer from the given config.
+// New returns a new instance of EventsAdapterServer from the given config.
 func (c completedConfig) New(evProvider provider.EventsProvider) (*EventsAdapterServer, error) {
 	genericServer, err := c.Config.GenericConfig.SkipComplete().New() // completion is done in Complete, no need for a second time
 	if err != nil {
@@ -98,7 +95,7 @@ func (c completedConfig) New(evProvider provider.EventsProvider) (*EventsAdapter
 		Provider: evProvider,
 	}
 
-	if err := s.InstallCustomMetricsAPI(); err != nil {
+	if err := s.InstallEventsAPI(); err != nil {
 		return nil, err
 	}
 

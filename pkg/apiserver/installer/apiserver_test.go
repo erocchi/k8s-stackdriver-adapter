@@ -103,7 +103,7 @@ func extractBodyString(response *http.Response) (string, error) {
 	return string(body), err
 }
 
-func handle(prov provider.CustomMetricsProvider) http.Handler {
+func handle(prov provider.EventsProvider) http.Handler {
 	container := restful.NewContainer()
 	container.Router(restful.CurlyRouter{})
 	mux := container.ServeMux
@@ -144,49 +144,6 @@ type fakeProvider struct {
 	rootSubsetCounts       map[string]int
 	namespacedSubsetCounts map[string]int
 	metrics                []provider.MetricInfo
-}
-
-func (p *fakeProvider) GetRootScopedMetricByName(groupResource schema.GroupResource, name string, metricName string) (*custom_metrics.MetricValue, error) {
-	metricId := groupResource.String()+"/"+name+"/"+metricName
-	values, ok := p.rootValues[metricId]
-	if !ok {
-		return nil, fmt.Errorf("non-existant metric requested (id: %s)", metricId)
-	}
-
-	return &values[0], nil
-}
-
-func (p *fakeProvider) GetRootScopedMetricBySelector(groupResource schema.GroupResource, selector labels.Selector, metricName string) (*custom_metrics.MetricValueList, error) {
-	metricId := groupResource.String()+"/*/"+metricName
-	values, ok := p.rootValues[metricId]
-	if !ok {
-		return nil, fmt.Errorf("non-existant metric requested (id: %s)", metricId)
-	}
-
-	var trimmedValues custom_metrics.MetricValueList
-
-	if trimmedCount, ok := p.rootSubsetCounts[metricId]; ok {
-		trimmedValues = custom_metrics.MetricValueList{
-			Items: make([]custom_metrics.MetricValue, 0, trimmedCount),
-		}
-		for i := range values {
-			var lbls labels.Labels
-			if i < trimmedCount {
-				lbls = matchingSet
-			} else {
-				lbls = emptySet
-			}
-			if selector.Matches(lbls) {
-				trimmedValues.Items = append(trimmedValues.Items, custom_metrics.MetricValue{})
-			}
-		}
-	} else {
-		trimmedValues = custom_metrics.MetricValueList{
-			Items: values,
-		}
-	}
-
-	return &trimmedValues, nil
 }
 
 func (p *fakeProvider) GetNamespacedMetricByName(groupResource schema.GroupResource, namespace string, name string, metricName string) (*custom_metrics.MetricValue, error) {

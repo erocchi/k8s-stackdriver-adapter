@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package apiserver
+package registry
 
 import (
 	"fmt"
@@ -25,7 +25,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	specificinstaller "k8s.io/k8s-stackdriver-adapter/pkg/apiserver/installer/context"
 	"k8s.io/k8s-stackdriver-adapter/pkg/provider"
-	"k8s.io/metrics/pkg/apis/events"
+	"k8s.io/metrics/pkg/apis/custom_metrics"
 
 )
 
@@ -45,13 +45,13 @@ func NewREST(evProvider provider.EventsProvider) *REST {
 // Implement Storage
 
 func (r *REST) New() runtime.Object {
-	return &events.EventValue{}
+	return &custom_metrics.MetricValue{}
 }
 
 // Implement Lister
 
 func (r *REST) NewList() runtime.Object {
-	return &events.EventValueList{}
+	return &custom_metrics.MetricValueList{}
 }
 
 
@@ -68,10 +68,7 @@ func (r *REST) List(ctx genericapirequest.Context, options *metainternalversion.
 	if resourceRaw != "events" {
 		return nil, fmt.Errorf("Usage : namespaces/{namespace}/events/{eventName}")
 	}
-	return GetNamespacedEventsByName(namespace,eventName)
+	_ ,err := r.evProvider.GetNamespacedEventsByName(namespace,eventName)
+	return nil,err
 }
 
-func GetNamespacedEventsByName( namespace, eventName string) (*events.EventValue, error){
-	return nil,fmt.Errorf("Hello wolrd! namespace: %s eventName: %s ", namespace, eventName)
-
-}

@@ -34,30 +34,10 @@ type fakeStackdriverService struct {
 
 //func (s *fakeStackdriverService)
 
-func setupStackdriverProvider(y *testing.T) (provider.CustomMetricsProvider, *fakeStackdriverService) {
+func setupStackdriverProvider(y *testing.T) (provider.EventsProvider, *fakeStackdriverService) {
 	//fakeRestClient := fake.FakeCoreV1{
 	//	testing.Fake,
 	//}.RESTClient()
 	//fakeKubeClient := &fake.
 	return nil, nil
-}
-
-func TestStackdriverProvider_ListAllMetrics(t *testing.T) {
-	assert.True(t, false)
-}
-
-func TestStackdriverProvider_GetNamespacedMetricByName(t *testing.T) {
-	// TODO
-}
-
-func TestStackdriverProvider_GetNamespacedMetricBySelector(t *testing.T) {
-	// TODO
-}
-
-func TestStackdriverProvider_GetRootScopedMetricByName(t *testing.T) {
-	// TODO
-}
-
-func TestStackdriverProvider_GetRootScopedMetricBySelector(t *testing.T) {
-	// TODO
-}
+}//TODO testAPI

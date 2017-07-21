@@ -1,12 +1,9 @@
 /*
 Copyright 2017 The Kubernetes Authors.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
     http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -26,7 +23,7 @@ import (
 	"k8s.io/k8s-stackdriver-adapter/pkg/apiserver"
 )
 
-type CustomMetricsAdapterServerOptions struct {
+type EventsAdapterServerOptions struct {
 	// genericoptions.ReccomendedOptions - EtcdOptions
 	SecureServing  *genericoptions.SecureServingOptions
 	Authentication *genericoptions.DelegatingAuthenticationOptions
@@ -37,8 +34,8 @@ type CustomMetricsAdapterServerOptions struct {
 	StdErr io.Writer
 }
 
-func NewCustomMetricsAdapterServerOptions(out, errOut io.Writer) *CustomMetricsAdapterServerOptions {
-	o := &CustomMetricsAdapterServerOptions{
+func NewEventsAdapterServerOptions(out, errOut io.Writer) *EventsAdapterServerOptions {
+	o := &EventsAdapterServerOptions{
 		SecureServing:  genericoptions.NewSecureServingOptions(),
 		Authentication: genericoptions.NewDelegatingAuthenticationOptions(),
 		Authorization:  genericoptions.NewDelegatingAuthorizationOptions(),
@@ -51,15 +48,15 @@ func NewCustomMetricsAdapterServerOptions(out, errOut io.Writer) *CustomMetricsA
 	return o
 }
 
-func (o CustomMetricsAdapterServerOptions) Validate(args []string) error {
+func (o EventsAdapterServerOptions) Validate(args []string) error {
 	return nil
 }
 
-func (o *CustomMetricsAdapterServerOptions) Complete() error {
+func (o *EventsAdapterServerOptions) Complete() error {
 	return nil
 }
 
-func (o CustomMetricsAdapterServerOptions) Config() (*apiserver.Config, error) {
+func (o EventsAdapterServerOptions) Config() (*apiserver.Config, error) {
 	// TODO have a "real" external address (have an AdvertiseAddress?)
 	if err := o.SecureServing.MaybeDefaultWithSelfSignedCerts("localhost", nil, []net.IP{net.ParseIP("127.0.0.1")}); err != nil {
 		return nil, fmt.Errorf("error creating self-signed certificates: %v", err)

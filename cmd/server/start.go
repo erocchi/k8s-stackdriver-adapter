@@ -32,9 +32,9 @@ import (
 
 // NewCommandStartMaster provides a CLI handler for 'start master' command
 func NewCommandStartSampleAdapterServer(out, errOut io.Writer, stopCh <-chan struct{}) *cobra.Command {
-	baseOpts := server.NewCustomMetricsAdapterServerOptions(out, errOut)
+	baseOpts := server.NewEventsAdapterServerOptions(out, errOut)
 	o := SampleAdapterServerOptions{
-		CustomMetricsAdapterServerOptions: baseOpts,
+		EventsAdapterServerOptions: baseOpts,
 	}
 
 	cmd := &cobra.Command{
@@ -47,7 +47,7 @@ func NewCommandStartSampleAdapterServer(out, errOut io.Writer, stopCh <-chan str
 			if err := o.Validate(args); err != nil {
 				return err
 			}
-			if err := o.RunCustomMetricsAdapterServer(stopCh); err != nil {
+			if err := o.RunEventsAdapterServer(stopCh); err != nil {
 				return err
 			}
 			return nil
@@ -59,7 +59,7 @@ func NewCommandStartSampleAdapterServer(out, errOut io.Writer, stopCh <-chan str
 	o.Authentication.AddFlags(flags)
 	o.Authorization.AddFlags(flags)
 	o.Features.AddFlags(flags)
-
+	fmt.Println(o.RemoteKubeConfigFile)
 	flags.StringVar(&o.RemoteKubeConfigFile, "lister-kubeconfig", o.RemoteKubeConfigFile, ""+
 			"kubeconfig file pointing at the 'core' kubernetes server with enough rights to list "+
 			"any described objets")
@@ -67,7 +67,7 @@ func NewCommandStartSampleAdapterServer(out, errOut io.Writer, stopCh <-chan str
 	return cmd
 }
 
-func (o SampleAdapterServerOptions) RunCustomMetricsAdapterServer(stopCh <-chan struct{}) error {
+func (o SampleAdapterServerOptions) RunEventsAdapterServer(stopCh <-chan struct{}) error {
 	config, err := o.Config()
 	if err != nil {
 		return err
@@ -95,9 +95,9 @@ func (o SampleAdapterServerOptions) RunCustomMetricsAdapterServer(stopCh <-chan 
 	if err != nil {
 		return fmt.Errorf("Failed to create Stackdriver client: %v", err)
 	}
-	cmProvider := provider.NewStackdriverProvider(client.RESTClient(), stackdriverService, 5 * time.Minute)
+	evProvider := provider.NewStackdriverProvider(client.RESTClient(), stackdriverService, 5 * time.Minute)
 
-	server, err := config.Complete().New(cmProvider)
+	server, err := config.Complete().New(evProvider)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (o SampleAdapterServerOptions) RunCustomMetricsAdapterServer(stopCh <-chan 
 }
 
 type SampleAdapterServerOptions struct {
-	*server.CustomMetricsAdapterServerOptions
+	*server.EventsAdapterServerOptions
 
 	// RemoteKubeConfigFile is the config used to list pods from the master API server
 	RemoteKubeConfigFile string
